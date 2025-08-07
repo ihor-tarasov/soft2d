@@ -42,4 +42,8 @@ impl Surface for Image {
     fn size(&self) -> IVec2 {
         self.size
     }
+
+    fn clear(&mut self, color: Color) {
+        self.pixels.fill(color.as_u32());
+    }
 }

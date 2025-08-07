@@ -52,6 +52,10 @@ impl<'a> Surface for Buffer<'a> {
     fn size(&self) -> IVec2 {
         self.size
     }
+
+    fn clear(&mut self, color: Color) {
+        self.inner.fill(color.as_u32());
+    }
 }
 
 impl<'a> Buffer<'a> {
