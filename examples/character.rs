@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use soft2d::{core::*, image::*, window::*};
 
 const SRC_TILE_SIZE: i32 = 48;
@@ -79,12 +81,61 @@ enum AnimationKind {
     Idle,
     Run,
     Shoot,
-    Die,
 }
 
 impl AnimationKind {
     const fn animation(self, direction: Direction) -> Animation {
         ANIMATIONS[self as usize * 2 + direction as usize]
+    }
+}
+
+struct InputConfig {
+    left: KeyCode,
+    right: KeyCode,
+    up: KeyCode,
+    down: KeyCode,
+    shoot: KeyCode,
+}
+
+impl InputConfig {
+    const fn new_player1() -> Self {
+        Self {
+            left: KeyCode::KeyA,
+            right: KeyCode::KeyD,
+            up: KeyCode::KeyW,
+            down: KeyCode::KeyS,
+            shoot: KeyCode::KeyB,
+        }
+    }
+
+    const fn new_player2() -> Self {
+        Self {
+            left: KeyCode::ArrowLeft,
+            right: KeyCode::ArrowRight,
+            up: KeyCode::ArrowUp,
+            down: KeyCode::ArrowDown,
+            shoot: KeyCode::ShiftRight,
+        }
+    }
+}
+
+struct Input {
+    left: bool,
+    right: bool,
+    up: bool,
+    down: bool,
+    shoot: bool,
+}
+
+impl Input {
+    fn read(window: &Window, config: &InputConfig) -> Self {
+        Self {
+            left: window.is_key_pressed(config.left),
+            right: window.is_key_pressed(config.right),
+            up: window.is_key_pressed(config.up),
+            down: window.is_key_pressed(config.down),
+            shoot: window.is_key_pressed(config.shoot),
+        }
     }
 }
 
@@ -95,20 +146,22 @@ struct Player {
     animation_kind: AnimationKind,
     direction: Direction,
     shoot: Option<Timer>,
+    input_config: InputConfig,
 }
 
 impl Player {
-    fn new() -> Self {
-        let image = Image::open("examples/character.png");
+    fn new<P: AsRef<Path>>(path: P, pos: Vec2, input_config: InputConfig) -> Self {
+        let image = Image::open(path);
         let animation_kind = AnimationKind::Idle;
         let direction = Direction::Right;
         Self {
-            pos: Vec2::ZERO,
+            pos,
             image,
             animation: animation_kind.animation(direction),
             animation_kind,
             direction,
             shoot: None,
+            input_config,
         }
     }
 
@@ -122,23 +175,24 @@ impl Player {
             let mut direction = self.direction;
             let mut animation_kind = self.animation_kind;
             let mut is_running = false;
-            if window.is_key_pressed(KeyCode::KeyW) {
+            let input = Input::read(window, &self.input_config);
+            if input.up {
                 animation_kind = AnimationKind::Run;
                 delta.y -= 1.0;
                 is_running = true;
             }
-            if window.is_key_pressed(KeyCode::KeyA) {
+            if input.left {
                 animation_kind = AnimationKind::Run;
                 direction = Direction::Left;
                 delta.x -= 1.0;
                 is_running = true;
             }
-            if window.is_key_pressed(KeyCode::KeyS) {
+            if input.down {
                 animation_kind = AnimationKind::Run;
                 delta.y += 1.0;
                 is_running = true;
             }
-            if window.is_key_pressed(KeyCode::KeyD) {
+            if input.right {
                 animation_kind = AnimationKind::Run;
                 direction = Direction::Right;
                 delta.x += 1.0;
@@ -147,7 +201,7 @@ impl Player {
             if !is_running {
                 animation_kind = AnimationKind::Idle;
             }
-            if window.is_key_pressed(KeyCode::KeyB) {
+            if input.shoot {
                 animation_kind = AnimationKind::Shoot;
                 self.shoot = Some(Timer::new(0.5));
             }
@@ -177,27 +231,42 @@ impl Player {
 }
 
 struct Character {
-    player: Player,
+    players: Vec<Player>,
 }
 
 impl Character {
     fn new() -> Self {
         Self {
-            player: Player::new(),
+            players: vec![
+                Player::new(
+                    "examples/pixel_character_pale_blue_original.png",
+                    vec2(-0.5, 0.0),
+                    InputConfig::new_player1(),
+                ),
+                Player::new(
+                    "examples/pixel_character_pale_red.png",
+                    vec2(0.5, 0.0),
+                    InputConfig::new_player2(),
+                ),
+            ],
         }
     }
 }
 
 impl State for Character {
     fn render(&mut self, window: &mut Window, dt: f32) {
-        self.player.update(window, dt);
+        for player in self.players.iter_mut() {
+            player.update(window, dt);
+        }
 
         let size = window.size();
         let scale = size.y.min(size.x) as f32;
         let camera_offset = size / 2;
         let mut buffer = window.buffer();
         buffer.clear(Color::LIGHT_GRAY);
-        self.player.render(&mut buffer, scale, camera_offset);
+        for player in self.players.iter() {
+            player.render(&mut buffer, scale, camera_offset);
+        }
         buffer.present();
     }
 }
