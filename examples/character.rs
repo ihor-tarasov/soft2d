@@ -264,6 +264,7 @@ impl State for Character {
         let camera_offset = size / 2;
         let mut buffer = window.buffer();
         buffer.clear(Color::LIGHT_GRAY);
+        self.players.sort_by(|a, b| a.pos.y.total_cmp(&b.pos.y));
         for player in self.players.iter() {
             player.render(&mut buffer, scale, camera_offset);
         }
