@@ -1,7 +1,9 @@
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
+use winit::keyboard::PhysicalKey;
 use winit::window::Window as WinitWindow;
 use winit::{
     application::ApplicationHandler,
@@ -18,6 +20,18 @@ pub struct Config<'a> {
     pub title: &'a str,
     pub width: u32,
     pub height: u32,
+    pub target_fps: Option<u32>,
+}
+
+impl<'a> Default for Config<'a> {
+    fn default() -> Self {
+        Self {
+            title: "Soft2D Window",
+            width: 640,
+            height: 480,
+            target_fps: Some(60),
+        }
+    }
 }
 
 pub struct Buffer<'a> {
@@ -46,10 +60,13 @@ impl<'a> Buffer<'a> {
     }
 }
 
+pub use winit::keyboard::KeyCode;
+
 pub struct Window {
     inner: Rc<WinitWindow>,
     surface: softbuffer::Surface<Rc<WinitWindow>, Rc<WinitWindow>>,
     size: IVec2,
+    key_pressed: HashSet<KeyCode>,
 }
 
 impl Window {
@@ -70,6 +87,7 @@ impl Window {
             inner,
             surface,
             size: ivec2(config.width as i32, config.height as i32),
+            key_pressed: HashSet::new(),
         }
     }
 
@@ -96,6 +114,10 @@ impl Window {
     pub fn size(&self) -> IVec2 {
         self.size
     }
+
+    pub fn is_key_pressed(&self, key: KeyCode) -> bool {
+        self.key_pressed.contains(&key)
+    }
 }
 
 pub trait State {
@@ -104,49 +126,43 @@ pub trait State {
     fn render(&mut self, window: &mut Window, dt: f32);
 }
 
-struct App<'a, S, F> {
+struct App<'a, S> {
     config: Config<'a>,
     window: Option<Window>,
-    state: Option<S>,
-    state_provider: F,
+    state: S,
     last_time: Instant,
     frames: usize,
-    frame_time: f32,
+    spend_time: f32,
+    target_frame_time: Option<f32>,
 }
 
-impl<'a, S, F> App<'a, S, F>
+impl<'a, S> App<'a, S>
 where
-    F: Fn(&mut Window) -> S,
     S: State,
 {
-    fn new(config: Config<'a>, state_provider: F) -> Self {
+    fn new(config: Config<'a>, state: S) -> Self {
         Self {
             config,
             window: None,
-            state: None,
-            state_provider,
+            state,
             last_time: Instant::now(),
             frames: 0,
-            frame_time: 0.0,
+            spend_time: 0.0,
+            target_frame_time: config.target_fps.map(|target_fps| 1.0 / target_fps as f32),
         }
     }
 }
 
-impl<'a, S, F> ApplicationHandler for App<'a, S, F>
+impl<'a, S> ApplicationHandler for App<'a, S>
 where
-    F: Fn(&mut Window) -> S,
     S: State,
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         debug_assert!(self.window.is_none());
-        let mut window = Window::new(event_loop, &self.config);
-        if self.state.is_none() {
-            self.state = Some((self.state_provider)(&mut window));
-        }
-        self.window = Some(window);
+        self.window = Some(Window::new(event_loop, &self.config));
         self.last_time = Instant::now();
         self.frames = 0;
-        self.frame_time = 0.0;
+        self.spend_time = 0.0;
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
@@ -165,25 +181,44 @@ where
             WindowEvent::Resized(size) => {
                 if let Some(window) = self.window.as_mut() {
                     window.resize(size.width, size.height);
-                    if let Some(state) = self.state.as_mut() {
-                        state.resize(window, ivec2(size.width as i32, size.height as i32));
+                    self.state
+                        .resize(window, ivec2(size.width as i32, size.height as i32));
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let Some(window) = self.window.as_mut() {
+                    if let PhysicalKey::Code(code) = event.physical_key {
+                        if !event.repeat {
+                            if event.state.is_pressed() {
+                                window.key_pressed.insert(code);
+                            } else {
+                                window.key_pressed.remove(&code);
+                            }
+                        }
                     }
                 }
             }
             WindowEvent::RedrawRequested => {
                 if let Some(window) = self.window.as_mut() {
-                    if let Some(state) = self.state.as_mut() {
-                        let now = Instant::now();
-                        let dt = (now - self.last_time).as_secs_f32();
-                        self.last_time = now;
-                        state.render(window, dt);
+                    let start = Instant::now();
+                    let dt = (start - self.last_time).as_secs_f32();
+                    self.last_time = start;
 
-                        self.frames += 1;
-                        self.frame_time += dt;
-                        while self.frame_time >= 1.0 {
-                            self.frame_time -= 1.0;
-                            println!("FPS: {}", self.frames);
-                            self.frames = 0;
+                    self.state.render(window, dt);
+
+                    self.frames += 1;
+                    self.spend_time += dt;
+                    while self.spend_time >= 1.0 {
+                        self.spend_time -= 1.0;
+                        println!("FPS: {}", self.frames);
+                        self.frames = 0;
+                    }
+
+                    if let Some(target_frame_time) = self.target_frame_time {
+                        let delta = (Instant::now() - start).as_secs_f32();
+                        if delta < target_frame_time {
+                            let sleep_time = target_frame_time - delta;
+                            std::thread::sleep(Duration::from_secs_f32(sleep_time));
                         }
                     }
                 }
@@ -199,13 +234,12 @@ where
     }
 }
 
-pub fn run<S, F>(config: Config, state_provider: F)
+pub fn run<S>(config: Config, state: S)
 where
-    F: Fn(&mut Window) -> S,
     S: State,
 {
     EventLoop::new()
         .unwrap()
-        .run_app(&mut App::new(config, state_provider))
+        .run_app(&mut App::new(config, state))
         .unwrap();
 }
